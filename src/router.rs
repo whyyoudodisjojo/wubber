@@ -1,24 +1,21 @@
 use std::sync::Arc;
 
-use anyhow::anyhow;
-use blew::peripheral::PeripheralRequest;
-use blew::{DeviceId, Peripheral};
+use anyhow::Result;
 use futures_util::stream::StreamExt;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::Message;
-use crate::buffers::Buffer;
-use crate::buffers::chat::ChatBuffer;
+use crate::transport::Transport;
 
-pub struct Router {
-    chat_tx: UnboundedSender<(DeviceId, Message)>,
-    heartbeat_tx: UnboundedSender<(DeviceId, Message)>,
+pub struct Router<T: Transport> {
+    chat_tx: UnboundedSender<(T::Peer, Message)>,
+    heartbeat_tx: UnboundedSender<(T::Peer, Message)>,
 }
 
-impl Router {
+impl<T: Transport> Router<T> {
     pub fn new(
-        chat_tx: UnboundedSender<(DeviceId, Message)>,
-        heartbeat_tx: UnboundedSender<(DeviceId, Message)>,
+        chat_tx: UnboundedSender<(T::Peer, Message)>,
+        heartbeat_tx: UnboundedSender<(T::Peer, Message)>,
     ) -> Self {
         Self {
             chat_tx,
@@ -26,33 +23,19 @@ impl Router {
         }
     }
 
-    pub fn start(self, p: Arc<Peripheral>) -> anyhow::Result<()> {
-        let mut req_stream = p.take_requests().ok_or(anyhow!("req stream failed"))?;
-
+    pub fn start(self, transport: Arc<T>) -> Result<()> {
         tokio::spawn(async move {
-            while let Some(request) = req_stream.next().await {
-                if let PeripheralRequest::Write {
-                    client_id,
-                    char_uuid,
-                    value,
-                    responder,
-                    ..
-                } = request
-                {
-                    if char_uuid == ChatBuffer::UUID
-                        && let Ok(message) = ciborium::from_reader::<Message, _>(&value[..])
-                    {
-                        match message {
-                            Message::Chat { .. } => {
-                                let _ = self.chat_tx.send((client_id, message));
-                            }
-                            Message::HeartBeat { .. } => {
-                                let _ = self.heartbeat_tx.send((client_id, message));
-                            }
+            let mut incoming = transport.incoming();
+
+            while let Some((peer, data)) = incoming.next().await {
+                if let Ok(message) = ciborium::from_reader::<Message, _>(&data[..]) {
+                    match message {
+                        Message::Chat { .. } => {
+                            let _ = self.chat_tx.send((peer, message));
                         }
-                    }
-                    if let Some(responder) = responder {
-                        responder.success();
+                        Message::HeartBeat { .. } => {
+                            let _ = self.heartbeat_tx.send((peer, message));
+                        }
                     }
                 }
             }

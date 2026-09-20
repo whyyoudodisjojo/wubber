@@ -2,18 +2,14 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use blew::central::{CentralEvent, WriteType};
-use blew::{Central, DeviceId};
-use futures_util::stream::StreamExt;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::mpsc::UnboundedReceiver;
 use uuid::Uuid;
 
-use crate::buffers::chat::ChatBuffer;
-use crate::buffers::Buffer;
-use crate::services::Services;
 use crate::Message;
+use crate::services::Services;
+use crate::transport::Transport;
 
 enum Decision {
     Consume,
@@ -23,23 +19,23 @@ enum Decision {
 
 const MAX_TTL: u8 = 10;
 
-pub struct ChatService {
-    central: Arc<Central>,
-    peers: Arc<AsyncMutex<HashSet<DeviceId>>>,
-    rx: AsyncMutex<UnboundedReceiver<(DeviceId, Message)>>,
+pub struct ChatService<T: Transport> {
+    transport: Arc<T>,
+    peers: Arc<AsyncMutex<HashSet<T::Peer>>>,
+    rx: AsyncMutex<UnboundedReceiver<(T::Peer, Message)>>,
     own_id: String,
     seen: Mutex<VecDeque<String>>,
 }
 
-impl ChatService {
+impl<T: Transport> ChatService<T> {
     pub fn new(
-        central: Arc<Central>,
-        peers: Arc<AsyncMutex<HashSet<DeviceId>>>,
-        rx: UnboundedReceiver<(DeviceId, Message)>,
+        transport: Arc<T>,
+        peers: Arc<AsyncMutex<HashSet<T::Peer>>>,
+        rx: UnboundedReceiver<(T::Peer, Message)>,
         own_id: String,
     ) -> Self {
         Self {
-            central,
+            transport,
             peers,
             rx: AsyncMutex::new(rx),
             own_id,
@@ -47,11 +43,11 @@ impl ChatService {
         }
     }
 
-    async fn next_incoming(&self) -> Option<(DeviceId, Message)> {
+    async fn next_incoming(&self) -> Option<(T::Peer, Message)> {
         self.rx.lock().await.recv().await
     }
 
-    async fn handle(&self, sender_id: &DeviceId, mut message: Message) {
+    async fn handle(&self, sender_id: &T::Peer, mut message: Message) {
         if let Message::Chat { id, .. } = &message {
             let mut seen = self.seen.lock().unwrap();
             if seen.contains(id) {
@@ -82,13 +78,13 @@ impl ChatService {
         }
     }
 
-    async fn consume(&self, sender_id: &DeviceId, message: &Message) {
+    async fn consume(&self, sender_id: &T::Peer, message: &Message) {
         if let Message::Chat { message, .. } = message {
             println!("[{}]: {}", sender_id, message);
         }
     }
 
-    async fn forward(&self, except: Option<&DeviceId>, message: &mut Message) {
+    async fn forward(&self, except: Option<&T::Peer>, message: &mut Message) {
         let ttl = match message {
             Message::Chat { ttl, .. } => ttl,
             Message::HeartBeat { .. } => return,
@@ -104,7 +100,7 @@ impl ChatService {
             return;
         }
 
-        let peers: Vec<DeviceId> = self.peers.lock().await.iter().cloned().collect();
+        let peers: Vec<T::Peer> = self.peers.lock().await.iter().cloned().collect();
         for peer_id in peers {
             if let Some(except) = except
                 && except == &peer_id
@@ -113,35 +109,20 @@ impl ChatService {
             }
 
             let _ = self
-                .central
-                .write_characteristic(
-                    &peer_id,
-                    ChatBuffer::UUID,
-                    payload.clone(),
-                    WriteType::WithoutResponse,
-                )
+                .transport
+                .send(&peer_id, &payload)
                 .await
                 .map_err(|e| eprintln!("Failed sending to peer {}: {}", peer_id, e));
         }
     }
 }
 
-impl Services for ChatService {
+impl<T: Transport> Services for ChatService<T> {
     async fn run(&self) -> Result<()> {
-        let mut events = self.central.events();
         let mut stdin_reader = BufReader::new(tokio::io::stdin()).lines();
 
         loop {
             tokio::select! {
-                Some(event) = events.next() => {
-                    if let CentralEvent::CharacteristicNotification { device_id, char_uuid, value } = event
-                        && char_uuid == ChatBuffer::UUID
-                        && let Ok(message) = ciborium::from_reader::<Message, _>(&value[..])
-                    {
-                        self.handle(&device_id, message).await;
-                    }
-                }
-
                 Some((remote_sender_id, message)) = self.next_incoming() => {
                     self.handle(&remote_sender_id, message).await;
                 }

@@ -3,61 +3,51 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use blew::central::{CentralEvent, ScanFilter, WriteType};
-use blew::{Central, DeviceId};
 use futures_util::stream::StreamExt;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::UnboundedReceiver;
-use uuid::uuid;
 
-use crate::buffers::Buffer;
-use crate::buffers::chat::ChatBuffer;
+use crate::Message;
 use crate::services::Services;
-use crate::{Message, NetChat};
+use crate::transport::Transport;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
 
-pub struct Discovery {
-    central: Arc<Central>,
-    peers: Arc<Mutex<HashSet<DeviceId>>>,
-    heartbeat_rx: Mutex<UnboundedReceiver<(DeviceId, Message)>>,
+pub struct Discovery<T: Transport> {
+    transport: Arc<T>,
+    peers: Arc<Mutex<HashSet<T::Peer>>>,
+    heartbeat_rx: Mutex<UnboundedReceiver<(T::Peer, Message)>>,
     own_id: String,
 }
 
-impl Discovery {
+impl<T: Transport> Discovery<T> {
     pub fn new(
-        central: Arc<Central>,
-        peers: Arc<Mutex<HashSet<DeviceId>>>,
-        heartbeat_rx: UnboundedReceiver<(DeviceId, Message)>,
+        transport: Arc<T>,
+        peers: Arc<Mutex<HashSet<T::Peer>>>,
+        heartbeat_rx: UnboundedReceiver<(T::Peer, Message)>,
         own_id: String,
     ) -> Self {
         Self {
-            central,
+            transport,
             peers,
             heartbeat_rx: Mutex::new(heartbeat_rx),
             own_id,
         }
     }
 
-    async fn next_heartbeat(&self) -> Option<(DeviceId, Message)> {
+    async fn next_heartbeat(&self) -> Option<(T::Peer, Message)> {
         self.heartbeat_rx.lock().await.recv().await
     }
 }
 
-impl Services for Discovery {
+impl<T: Transport> Services for Discovery<T> {
     async fn run(&self) -> Result<()> {
-        let mut events = self.central.events();
+        self.transport.scan().await?;
+        let mut discovered = self.transport.discovered();
 
-        self.central
-            .start_scan(ScanFilter {
-                services: vec![uuid!(NetChat::SERVICE_UUID)],
-                ..Default::default()
-            })
-            .await?;
-
-        let mut last_seen: HashMap<DeviceId, Instant> = HashMap::new();
-        let mut known_ids: HashMap<DeviceId, String> = HashMap::new();
+        let mut last_seen: HashMap<T::Peer, Instant> = HashMap::new();
+        let mut known_ids: HashMap<T::Peer, String> = HashMap::new();
 
         let mut heartbeat_timer = tokio::time::interval(HEARTBEAT_INTERVAL);
         heartbeat_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -65,25 +55,23 @@ impl Services for Discovery {
 
         loop {
             tokio::select! {
-                Some(event) = events.next() => {
-                    if let CentralEvent::DeviceDiscovered(device) = event {
-                        if self.peers.lock().await.contains(&device.id) {
-                            continue;
-                        }
+                Some(peer) = discovered.next() => {
+                    if self.peers.lock().await.contains(&peer) {
+                        continue;
+                    }
 
-                        match self.central.connect(&device.id).await {
-                            Ok(()) => {
-                                println!("Connected to {}", device.id);
-                                let _ = self
-                                    .central
-                                    .subscribe_characteristic(&device.id, ChatBuffer::UUID)
-                                    .await
-                                    .map_err(|e| eprintln!("Failed to subscribe to {}: {}", device.id, e));
-                                self.peers.lock().await.insert(device.id.clone());
-                                last_seen.insert(device.id.clone(), Instant::now());
-                            }
-                            Err(e) => println!("Connection failed: {}", e),
+                    match self.transport.connect(&peer).await {
+                        Ok(()) => {
+                            println!("Connected to {}", peer);
+                            let _ = self
+                                .transport
+                                .subscribe(&peer)
+                                .await
+                                .map_err(|e| eprintln!("Failed to subscribe to {}: {}", peer, e));
+                            self.peers.lock().await.insert(peer.clone());
+                            last_seen.insert(peer, Instant::now());
                         }
+                        Err(e) => println!("Connection failed: {}", e),
                     }
                 }
 
@@ -99,7 +87,7 @@ impl Services for Discovery {
 
                 _ = heartbeat_timer.tick() => {
                     let now = Instant::now();
-                    let stale: Vec<DeviceId> = last_seen
+                    let stale: Vec<T::Peer> = last_seen
                         .iter()
                         .filter(|(_, last)| now.duration_since(**last) > HEARTBEAT_TIMEOUT)
                         .map(|(id, _)| id.clone())
@@ -107,7 +95,7 @@ impl Services for Discovery {
                     for id in stale {
                         last_seen.remove(&id);
                         self.peers.lock().await.remove(&id);
-                        let _ = self.central.disconnect(&id).await;
+                        let _ = self.transport.disconnect(&id).await;
                         println!("Lost connection to {}", id);
                     }
 
@@ -117,17 +105,13 @@ impl Services for Discovery {
                         &mut payload,
                     ).inspect_err(|e| eprintln!("Failed to encode cbor: {e}"));
 
-                    let peers: Vec<DeviceId> = self.peers.lock().await.iter().cloned().collect();
+                    let peers: Vec<T::Peer> = self.peers.lock().await.iter().cloned().collect();
                     for peer_id in peers {
                         let _ = self
-                            .central
-                            .write_characteristic(
-                                &peer_id,
-                                ChatBuffer::UUID,
-                                payload.clone(),
-                                WriteType::WithoutResponse,
-                            )
-                            .await.inspect_err(|e| eprintln!("Failed to launch hearbeat: {e}"));
+                            .transport
+                            .send(&peer_id, &payload)
+                            .await
+                            .inspect_err(|e| eprintln!("Failed to launch heartbeat: {e}"));
                     }
                 }
             }

@@ -548,6 +548,7 @@ dependencies = [
  "futures-util",
  "serde",
  "tokio",
+ "tokio-stream",
  "uuid",
 ]
 
