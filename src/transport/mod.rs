@@ -15,13 +15,9 @@ use tokio_stream::wrappers::BroadcastStream;
 pub type Incoming<Id> = (Id, Vec<u8>);
 
 pub trait Transport: Send + Sync + Sized + 'static {
-    type Config: Send;
-
     type Peer: Clone + Eq + Hash + Display + Send + Sync + 'static;
     type Incoming: Stream<Item = Incoming<Self::Peer>> + Send + Unpin + 'static;
     type Discovered: Stream<Item = Self::Peer> + Send + Unpin + 'static;
-
-    fn new(config: Self::Config) -> impl Future<Output = Result<Self>> + Send;
 
     fn advertise(&self) -> impl Future<Output = Result<()>> + Send {
         async { Ok(()) }

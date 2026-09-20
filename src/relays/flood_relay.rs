@@ -146,16 +146,9 @@ impl<T: Transport> FloodRelay<T> {
 }
 
 impl<T: Transport> Transport for FloodRelay<T> {
-    type Config = T::Config;
     type Peer = T::Peer;
     type Incoming = BroadcastEventStream<Incoming<T::Peer>>;
     type Discovered = futures_util::stream::SelectAll<T::Discovered>;
-
-    async fn new(config: Self::Config) -> Result<Self> {
-        let relay = Self::wrap(vec![Arc::new(T::new(config).await?)], MAX_TTL);
-        relay.spawn_pump();
-        Ok(relay)
-    }
 
     async fn advertise(&self) -> Result<()> {
         for inner in self.inners_arc() {

@@ -68,13 +68,8 @@ impl WifiDirectTransport {
     }
 }
 
-impl Transport for WifiDirectTransport {
-    type Config = WifiDirectConfig;
-    type Peer = String;
-    type Incoming = BroadcastEventStream<Incoming<String>>;
-    type Discovered = BroadcastEventStream<String>;
-
-    async fn new(config: Self::Config) -> Result<Self> {
+impl WifiDirectTransport {
+    pub async fn new(config: WifiDirectConfig) -> Result<Self> {
         let connection = zbus::conn::Builder::system()?.build().await?;
 
         let supplicant = SupplicantProxy::new(&connection).await?;
@@ -206,6 +201,12 @@ impl Transport for WifiDirectTransport {
             discovered_tx,
         })
     }
+}
+
+impl Transport for WifiDirectTransport {
+    type Peer = String;
+    type Incoming = BroadcastEventStream<Incoming<String>>;
+    type Discovered = BroadcastEventStream<String>;
 
     async fn advertise(&self) -> Result<()> {
         Ok(())

@@ -120,14 +120,9 @@ impl BleTransport {
 }
 
 impl Transport for BleTransport {
-    type Config = BleTransportConfig;
     type Peer = DeviceId;
     type Incoming = BroadcastEventStream<Incoming<DeviceId>>;
     type Discovered = BroadcastEventStream<DeviceId>;
-
-    async fn new(config: Self::Config) -> Result<Self> {
-        Self::new(config).await
-    }
 
     async fn advertise(&self) -> Result<()> {
         self.peripheral
