@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use blew::central::{CentralEvent, ScanFilter, WriteType};
 use blew::gatt::{GattCharacteristic, GattService};
-use blew::peripheral::{AdvertisingConfig, PeripheralRequest};
+use blew::peripheral::{AdvertisingConfig, LocalName, PeripheralRequest};
 use blew::{Central, DeviceId, Peripheral};
 use futures_util::stream::StreamExt;
 use tokio::sync::broadcast;
@@ -132,7 +132,7 @@ impl Transport for BleTransport {
     async fn advertise(&self) -> Result<()> {
         self.peripheral
             .start_advertising(&AdvertisingConfig {
-                local_name: self.name.clone(),
+                local_name: LocalName::Temporary(self.name.clone()),
                 service_uuids: vec![self.service_uuid],
             })
             .await?;
@@ -179,6 +179,10 @@ impl Transport for BleTransport {
             )
             .await?;
         Ok(())
+    }
+
+    async fn broadcast(&self, _data: &[u8]) -> Result<()> {
+        Err(anyhow!("ble transport has no broadcast channel"))
     }
 
     async fn disconnect(&self, peer: &Self::Peer) -> Result<()> {

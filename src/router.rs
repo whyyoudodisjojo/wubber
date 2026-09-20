@@ -33,7 +33,7 @@ impl<T: Transport> Router<T> {
                         Message::Chat { .. } => {
                             let _ = self.chat_tx.send((peer, message));
                         }
-                        Message::HeartBeat { .. } => {
+                        Message::HeartBeat => {
                             let _ = self.heartbeat_tx.send((peer, message));
                         }
                     }

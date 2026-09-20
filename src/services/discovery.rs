@@ -18,7 +18,6 @@ pub struct Discovery<T: Transport> {
     transport: Arc<T>,
     peers: Arc<Mutex<HashSet<T::Peer>>>,
     heartbeat_rx: Mutex<UnboundedReceiver<(T::Peer, Message)>>,
-    own_id: String,
 }
 
 impl<T: Transport> Discovery<T> {
@@ -26,13 +25,11 @@ impl<T: Transport> Discovery<T> {
         transport: Arc<T>,
         peers: Arc<Mutex<HashSet<T::Peer>>>,
         heartbeat_rx: UnboundedReceiver<(T::Peer, Message)>,
-        own_id: String,
     ) -> Self {
         Self {
             transport,
             peers,
             heartbeat_rx: Mutex::new(heartbeat_rx),
-            own_id,
         }
     }
 
@@ -47,7 +44,6 @@ impl<T: Transport> Services for Discovery<T> {
         let mut discovered = self.transport.discovered();
 
         let mut last_seen: HashMap<T::Peer, Instant> = HashMap::new();
-        let mut known_ids: HashMap<T::Peer, String> = HashMap::new();
 
         let mut heartbeat_timer = tokio::time::interval(HEARTBEAT_INTERVAL);
         heartbeat_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -75,14 +71,8 @@ impl<T: Transport> Services for Discovery<T> {
                     }
                 }
 
-                Some((device_id, message)) = self.next_heartbeat() => {
-                    if let Message::HeartBeat { id } = message {
-                        last_seen.insert(device_id.clone(), Instant::now());
-                        if known_ids.get(&device_id) != Some(&id) {
-                            known_ids.insert(device_id.clone(), id.clone());
-                            println!("Peer {} has id {}", device_id, id);
-                        }
-                    }
+                Some((device_id, _)) = self.next_heartbeat() => {
+                    last_seen.insert(device_id, Instant::now());
                 }
 
                 _ = heartbeat_timer.tick() => {
@@ -100,19 +90,13 @@ impl<T: Transport> Services for Discovery<T> {
                     }
 
                     let mut payload = Vec::new();
-                    let _ = ciborium::into_writer(
-                        &Message::HeartBeat { id: self.own_id.clone() },
-                        &mut payload,
-                    ).inspect_err(|e| eprintln!("Failed to encode cbor: {e}"));
-
-                    let peers: Vec<T::Peer> = self.peers.lock().await.iter().cloned().collect();
-                    for peer_id in peers {
-                        let _ = self
-                            .transport
-                            .send(&peer_id, &payload)
-                            .await
-                            .inspect_err(|e| eprintln!("Failed to launch heartbeat: {e}"));
-                    }
+                    let _ = ciborium::into_writer(&Message::HeartBeat, &mut payload)
+                        .map_err(|e| eprintln!("Failed to encode cbor: {e}"));
+                    let _ = self
+                        .transport
+                        .broadcast(&payload)
+                        .await
+                        .map_err(|e| eprintln!("Failed to launch heartbeat: {e}"));
                 }
             }
         }

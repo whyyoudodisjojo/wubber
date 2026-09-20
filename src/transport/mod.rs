@@ -1,5 +1,4 @@
 pub mod ble;
-pub mod protocol;
 pub mod wifi_direct;
 
 use std::fmt::Display;
@@ -24,13 +23,26 @@ pub trait Transport: Send + Sync + Sized + 'static {
 
     fn new(config: Self::Config) -> impl Future<Output = Result<Self>> + Send;
 
-    fn advertise(&self) -> impl Future<Output = Result<()>> + Send;
-    fn scan(&self) -> impl Future<Output = Result<()>> + Send;
+    fn advertise(&self) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
+
+    fn scan(&self) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
     fn discovered(&self) -> Self::Discovered;
     fn connect(&self, peer: &Self::Peer) -> impl Future<Output = Result<()>> + Send;
-    fn subscribe(&self, peer: &Self::Peer) -> impl Future<Output = Result<()>> + Send;
+    fn subscribe(&self, peer: &Self::Peer) -> impl Future<Output = Result<()>> + Send {
+        async move { self.connect(peer).await }
+    }
     fn send(&self, peer: &Self::Peer, data: &[u8]) -> impl Future<Output = Result<()>> + Send;
-    fn disconnect(&self, peer: &Self::Peer) -> impl Future<Output = Result<()>> + Send;
+    fn broadcast(&self, data: &[u8]) -> impl Future<Output = Result<()>> + Send;
+    fn disconnect(&self, peer: &Self::Peer) -> impl Future<Output = Result<()>> + Send {
+        async move {
+            let _ = peer;
+            Ok(())
+        }
+    }
     fn incoming(&self) -> Self::Incoming;
 }
 

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use futures_util::stream::StreamExt;
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
 use zbus::proxy;
@@ -103,11 +104,19 @@ impl Transport for WifiDirectTransport {
         )]);
         let _ = p2p.set_p2p_device_config(device).await;
 
-        let socket =
-            Arc::new(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.port)).await?);
-        socket
-            .set_broadcast(true)
+        let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+        sock.set_reuse_address(true)
+            .map_err(|e| anyhow!("wifi-direct: address reuse: {e}"))?;
+        sock.set_broadcast(true)
             .map_err(|e| anyhow!("wifi-direct: enable broadcast: {e}"))?;
+        sock.bind(&SockAddr::from(SocketAddrV4::new(
+            Ipv4Addr::UNSPECIFIED,
+            config.port,
+        )))
+        .map_err(|e| anyhow!("wifi-direct: bind: {e}"))?;
+        sock.set_nonblocking(true)
+            .map_err(|e| anyhow!("wifi-direct: nonblocking: {e}"))?;
+        let socket = Arc::new(UdpSocket::from_std(sock.into())?);
 
         let (incoming_tx, _) = broadcast::channel(1024);
         let (discovered_tx, _) = broadcast::channel(1024);
@@ -234,6 +243,10 @@ impl Transport for WifiDirectTransport {
     }
 
     async fn send(&self, _peer: &Self::Peer, data: &[u8]) -> Result<()> {
+        self.broadcast(data).await
+    }
+
+    async fn broadcast(&self, data: &[u8]) -> Result<()> {
         self.socket
             .send_to(data, SocketAddrV4::new(Ipv4Addr::BROADCAST, self.port))
             .await?;

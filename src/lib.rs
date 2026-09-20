@@ -1,4 +1,5 @@
 pub mod buffers;
+pub mod relays;
 pub mod router;
 pub mod services;
 pub mod transport;
@@ -20,18 +21,40 @@ use crate::transport::Transport;
 
 pub const SERVICE_UUID: &str = "95ebaece-3ea2-4b13-b2ac-c48d6799a9a6";
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Frame {
+    pub origin: String,
+    pub seq: u64,
+    pub ttl: u8,
+    pub payload: Vec<u8>,
+}
+
+impl Frame {
+    pub fn new(origin: String, seq: u64, ttl: u8, payload: Vec<u8>) -> Self {
+        Self {
+            origin,
+            seq,
+            ttl,
+            payload,
+        }
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        ciborium::into_writer(self, &mut out)?;
+        Ok(out)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        Ok(ciborium::from_reader(bytes)?)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
-    Chat {
-        id: String,
-        message: String,
-        target: String,
-        ttl: u8,
-    },
-    HeartBeat {
-        id: String,
-    },
+    Chat { message: String, target: String },
+    HeartBeat,
 }
 
 pub struct NetChat<T: Transport> {
@@ -57,18 +80,14 @@ impl<T: Transport> NetChat<T> {
 
         let own_id = Uuid::new_v4().to_string();
 
-        let sender = ChatService::new(
-            self.transport.clone(),
-            peers.clone(),
-            chat_rx,
-            own_id.clone(),
-        );
-        let discovery = Discovery::new(self.transport, peers, heartbeat_rx, own_id);
+        let sender = ChatService::new(self.transport.clone(), chat_rx, own_id);
+        let discovery = Discovery::new(self.transport, peers, heartbeat_rx);
 
         tokio::spawn(async move {
-            if let Err(e) = sender.run().await {
-                eprintln!("chat service stopped: {e}");
-            }
+            let _ = sender
+                .run()
+                .await
+                .map_err(|e| eprintln!("chat service stopped: {e}"));
         });
 
         discovery.run().await?;
