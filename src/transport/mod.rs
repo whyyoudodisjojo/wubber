@@ -1,4 +1,5 @@
 pub mod ble;
+pub mod wifi_direct;
 
 use std::fmt::Display;
 use std::future::Future;
