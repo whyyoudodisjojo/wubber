@@ -85,7 +85,10 @@ impl<T: Transport> FloodRelay<T> {
                     continue;
                 };
                 let origin_len = u16::from_be_bytes(origin_len) as usize;
-                let Some(origin) = bytes.get(11..11 + origin_len).and_then(|b| std::str::from_utf8(b).ok()) else {
+                let Some(origin) = bytes
+                    .get(11..11 + origin_len)
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                else {
                     continue;
                 };
                 if origin == own_id {
@@ -260,14 +263,18 @@ mod tests {
         let bytes = framed("peer-2", 9, 4, b"hello");
         let _ = inner.incoming_tx.send((Node(2), bytes));
 
-        let (peer, payload) =
-            tokio::time::timeout(Duration::from_secs(1), rx.next()).await.unwrap().unwrap();
+        let (peer, payload) = tokio::time::timeout(Duration::from_secs(1), rx.next())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(peer, Node(2));
         assert_eq!(payload, b"hello");
 
-        assert!(tokio::time::timeout(Duration::from_millis(200), rx.next())
-            .await
-            .is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), rx.next())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -282,8 +289,10 @@ mod tests {
         let bytes = framed(&relay.own_id, 1, 5, b"echo");
         let _ = inner.incoming_tx.send((Node(1), bytes));
 
-        assert!(tokio::time::timeout(Duration::from_millis(200), rx.next())
-            .await
-            .is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), rx.next())
+                .await
+                .is_err()
+        );
     }
 }

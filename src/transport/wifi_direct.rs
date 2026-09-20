@@ -85,21 +85,26 @@ impl Transport for WifiDirectTransport {
                     String::from("Ifname"),
                     OwnedValue::from(Str::from(config.interface.as_str())),
                 );
-                args.insert(String::from("Driver"), OwnedValue::from(Str::from("nl80211")));
+                args.insert(
+                    String::from("Driver"),
+                    OwnedValue::from(Str::from("nl80211")),
+                );
                 supplicant.create_interface(args).await?.to_string()
             }
         };
 
-        let p2p = P2pDeviceProxy::builder(&connection).path(iface.as_str())?.build().await?;
+        let p2p = P2pDeviceProxy::builder(&connection)
+            .path(iface.as_str())?
+            .build()
+            .await?;
         let device = HashMap::from([(
             String::from("DeviceName"),
             OwnedValue::from(Str::from(config.name)),
         )]);
         let _ = p2p.set_p2p_device_config(device).await;
 
-        let socket = Arc::new(
-            UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.port)).await?,
-        );
+        let socket =
+            Arc::new(UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.port)).await?);
         socket
             .set_broadcast(true)
             .map_err(|e| anyhow!("wifi-direct: enable broadcast: {e}"))?;
@@ -113,8 +118,12 @@ impl Transport for WifiDirectTransport {
         tokio::spawn(async move {
             let p2p = P2pDeviceProxy::builder(&dp_connection).path(dp_iface.as_str());
             let Ok(builder) = p2p else { return };
-            let Ok(p2p) = builder.build().await else { return };
-            let Ok(mut found) = p2p.receive_device_found().await else { return };
+            let Ok(p2p) = builder.build().await else {
+                return;
+            };
+            let Ok(mut found) = p2p.receive_device_found().await else {
+                return;
+            };
 
             while let Some(message) = found.next().await {
                 let Ok(args) = message.args() else { continue };
@@ -148,7 +157,9 @@ impl Transport for WifiDirectTransport {
                                         let mut columns = line.split_whitespace();
                                         let Some(addr) = columns.next() else { continue };
                                         let Some(_hw) = columns.next() else { continue };
-                                        let Some(_flags) = columns.next() else { continue };
+                                        let Some(_flags) = columns.next() else {
+                                            continue;
+                                        };
                                         let Some(hw) = columns.next() else { continue };
                                         if let Ok(addr) = addr.parse::<Ipv4Addr>()
                                             && addr == ip
@@ -210,7 +221,10 @@ impl Transport for WifiDirectTransport {
             String::from("peer"),
             OwnedValue::from(ObjectPath::try_from(self.peer_object_path(peer))?),
         );
-        args.insert(String::from("wps_method"), OwnedValue::from(Str::from("pbc")));
+        args.insert(
+            String::from("wps_method"),
+            OwnedValue::from(Str::from("pbc")),
+        );
         self.p2p().await?.connect(args).await?;
         Ok(())
     }
